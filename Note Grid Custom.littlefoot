@@ -100,21 +100,28 @@ int currentView;
 int activePadView;
 int activeTab;
 
+int selectedChord;
+
 const int VIEW_FADERS = 0;
 const int VIEW_DRUMS = 1;
 const int VIEW_NOTE = 2;
+const int VIEW_CHORD = 3;
+const int VIEW_SUSTAIN = 4;
 
 const int TAB_MIDI = 0;
 const int TAB_SCALE = 1;
 const int TAB_5D = 2;
 
-const int GRADIENT1 = 0xff4dfcf0;
-
+const int GRADIENT1 = 0xff4b5eed;
+const int GRADIENT2 = 0xff9850e6;
 
 const int COL_TOP_5D = 0xFF80FFFF;
 const int COL_BOTTOM_5D = 0xFF0000FF;
 const int COL_TOP_MIDI = 0xffe36d94;
 const int COL_BOTTOM_MIDI = 0xffe36d50;
+
+const int ACTIVE = 0xff366CC5;
+const int INACTIVE = 0xFF808080;
 
 int faderOctave;
 int faderTranspose;
@@ -134,11 +141,7 @@ const int TRANSPOSE = 5;
 const int PBRANGE = 3;
 const int VELOFIX = 16;
 const int SCALE = 22;
-
-const int pressdownCutoff = 3;
-int pressdownCounter;
-bool isPressed;
-
+const int CHORD = 24;
 
 //==============================================================================
 
@@ -154,38 +157,6 @@ int Channel_getTrackedTouch (int channel)
 
 
 //==============================================================================
-
-int getGradientColour1 (int octave) {
-    if (octave == -2) {
-      return 0xff4dfcf0
-    } else if (octave == -1) {
-      return 0xff4b5eed
-    } else if (octave == 0) {
-      return 0xff4b5eed
-    } else if (octave == 1) {
-      return 0xff4b5eed
-    } else if (octave == 2) {
-      return 0xffe673d2 
-    } else {
-      return 0x7199ff
-    }
-}
-
-int getGradientColour2 (int octave) {
-    if (octave == -2) {
-      return 0xff4dfcf0
-    } else if (octave == -1) {
-      return 0xff4b5eed
-    } else if (octave == 0) {
-      return 0xff9850e6
-    } else if (octave == 1) {
-      return 0xfff8676e
-    } else if (octave == 2) {
-      return 0xff4288f7 
-    } else {
-      return 0x7199ff
-    }
-}
 
 void sustainOn () {
     sendCC(0, 64, 127);
@@ -370,6 +341,25 @@ void drawPads()
             ++padIndex;
 		}
 	}
+	if (currentView == VIEW_SUSTAIN) {
+	    drawSustainBar();
+	}
+	if (currentView == VIEW_CHORD) {
+	    drawChordBar();
+	}
+}
+
+void drawChordBar() {
+    fillRect(0x00000000, 0, 12, 15, 3);
+    for (int i = 0; i <= 6; i++) {
+        fillRect(selectedChord == i ? 0xff366CC5 : INACTIVE, 2*i + 1, 13, 1, 1);
+    }
+}
+
+void drawSustainBar () {
+    int col = 0xff366CC5;
+    fillRect(0x00000000, 0, 12, 15, 3);
+    fillRect(col, 1, 13, 13, 1);
 }
 
 
@@ -478,8 +468,8 @@ void initialisePads()
 			{
 				int blend = 0xff * (noteInScale - 1) / 10;
 
-				padColour = blendARGB (getGradientColour1(octave) | 0xff000000,
-				                       (getGradientColour2(octave) & 0x00ffffff) | (blend << 24));
+				padColour = blendARGB (GRADIENT1 | 0xff000000,
+				                       (GRADIENT2 & 0x00ffffff) | (blend << 24));
 			}
 		}
 
@@ -529,6 +519,7 @@ void initialiseConfig()
 	octave = getLocalConfig(4);
 	tonic = 0;
 	scale = 0;
+	selectedChord = -1;
 	hideMode = false;
 }
 
@@ -541,14 +532,9 @@ void initialiseGlideLock()
 }
 
 void initialiseView() {
-    currentView = VIEW_NOTE;
-    activePadView = VIEW_NOTE;
+    currentView = VIEW_CHORD;
+    activePadView = VIEW_CHORD;
     activeTab = TAB_MIDI;
-}
-
-void initialisePressdown() {
-    isPressed = false;
-    pressdownCounter = 0;
 }
 
 void initialise()
@@ -589,7 +575,6 @@ void initialise()
 	initialiseChannels();
     initialiseGlideLock();
     initialiseView();
-    initialisePressdown();
 	useMPEDuplicateFilter (true);
 
 }
@@ -607,18 +592,9 @@ void repaint()
 { 
 	clearDisplay();
 	updateDimFactor();
-
-	if (isConnectedToHost())
-    {
+	if (isConnectedToHost()) {
         drawView();
-        if (pressdownCounter == pressdownCutoff) {
-            sustainOn();
-        }
-        if (isPressed && pressdownCounter <= pressdownCutoff) {
-            pressdownCounter += 1;
-        }
     }
-
     checkConfigUpdates();
 
     // Overlay heatmap
@@ -812,6 +788,12 @@ int getGlideLockDelta()
           : 0;
 }
 
+void setChord(int index) {
+    selectedChord = (selectedChord == index || index == -1) ? -1 : index;
+    int chord = (selectedChord == -1) ? 0 : selectedChord + 3;
+    setLocalConfig(CHORD, chord);
+}
+
 //==============================================================================
 void touchStart (int touchIndex, float x, float y, float z, float vz)
 {
@@ -825,6 +807,21 @@ void touchStart (int touchIndex, float x, float y, float z, float vz)
         return;
     
     int padIndex = getTouchedPad (x, y);
+    
+    bool isBottomRow = (padIndex >= 20);
+
+    if (isBottomRow && currentView == VIEW_SUSTAIN) {
+        Touch_setPad (touchIndex, padIndex);
+        sustainOn();
+        return;
+    }
+    if (isBottomRow && currentView == VIEW_CHORD) {
+        float half = 1.0 / 15;
+        int buttonIndex = int ((x - half) / (4 * half));
+        setChord(buttonIndex);
+        return;
+    }
+
     int note = clamp (0, 127, Pad_getNote (padIndex));
     int colour = Pad_getColour (padIndex);
     int channel = 0xff;
@@ -960,6 +957,7 @@ void touchMove (int touchIndex, float x, float y, float z, float vz)
 
 void touchEnd (int touchIndex, float x, float y, float z, float vz)
 {
+    
     if (gridSize == 6)
         return;
     
@@ -967,6 +965,11 @@ void touchEnd (int touchIndex, float x, float y, float z, float vz)
 
     if (padIndex == 0xff)
         return;  // touch was not started.
+    
+    if (padIndex >= 20) {
+        sustainOff();
+    }
+    
 
     int channel = Touch_getChannel (touchIndex);
 
@@ -1016,8 +1019,7 @@ void touchEnd (int touchIndex, float x, float y, float z, float vz)
 
 void handleButtonDown (int index) {
     if(index == 0) {
-        isPressed = true;
-        pressdownCounter = 0;
+        toggleView();
     }
 }
 
@@ -1031,17 +1033,6 @@ void toggleView () {
     setLocalConfig (20, gridSize);
     initialiseScale();
     initialisePads ();
-}
-
-void handleButtonUp (int index) {
-    if(index == 0) {
-        isPressed = false;
-        if (pressdownCounter > pressdownCutoff) {
-            sustainOff();
-        } else {
-            toggleView();
-        }
-    }
 }
 
 void checkConfigUpdates ()
@@ -1117,19 +1108,22 @@ void displayValue (int val) {
     drawNumber(val, 0xFFFFFFFF, x, 4);
 }
 
+int tabColor (int view) { return activePadView == view ? ACTIVE : INACTIVE }
+
 void drawFaders()
 {
-    int active = 0xFFFFFFFF;
-    int inactive = 0xFF808080;
-    bool notes = (activePadView == VIEW_NOTE);
     
     // Drum and note grid selection
-    fillRect (notes ? active : inactive, 1, 13, 6, 1);
-    fillRect (!notes ? active : inactive, 8, 13, 6, 1);
+    //fillRect (notes ? active : inactive, 1, 13, 6, 1);
+    //fillRect (!notes ? active : inactive, 8, 13, 6, 1);
+    fillRect (tabColor(VIEW_NOTE), 2, 13, 2, 1);
+    fillRect (tabColor(VIEW_SUSTAIN), 5, 13, 2, 1);
+    fillRect (tabColor(VIEW_CHORD), 8, 13, 2, 1);
+    fillRect (tabColor(VIEW_DRUMS), 11, 13, 2, 1);
     
     // Settings tabs
-    fillRect (activeTab == TAB_MIDI ? active: inactive, 11, 1, 3, 2);
-    fillRect (activeTab == TAB_5D ? active: inactive, 11, 4, 3, 2);
+    fillRect (activeTab == TAB_MIDI ? ACTIVE: INACTIVE, 11, 1, 3, 2);
+    fillRect (activeTab == TAB_5D ? ACTIVE: INACTIVE, 11, 4, 3, 2);
     
     // Faders
     if (activeTab == TAB_MIDI) {
@@ -1222,7 +1216,18 @@ int updateFixedVelo(int faderValue) {
 
 void handleFaderTouch (int touchIndex, float x, float y, float z, bool newTouch) {
     if (y > 1.85 && newTouch) {
-        activePadView = (x < 1) ? VIEW_NOTE : VIEW_DRUMS;
+        if (x < 0.6) {
+            activePadView = VIEW_NOTE;
+        } else if (x < 1) {
+            activePadView = VIEW_SUSTAIN;
+        } else if (x < 1.5) {
+            activePadView = VIEW_CHORD;
+        } else {
+            activePadView = VIEW_DRUMS;
+        }
+        if (activePadView != VIEW_CHORD) {
+            setChord(-1);
+        }
         return;
     }
     if (x > 1.6){
